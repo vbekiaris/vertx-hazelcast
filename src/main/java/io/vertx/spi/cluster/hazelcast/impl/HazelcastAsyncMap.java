@@ -29,6 +29,7 @@ import io.vertx.core.shareddata.AsyncMap;
 import io.vertx.core.shareddata.impl.ClusterSerializable;
 
 import java.io.IOException;
+import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 
 import static io.vertx.spi.cluster.hazelcast.impl.ConversionUtils.convertParam;
@@ -46,10 +47,9 @@ public class HazelcastAsyncMap<K, V> implements AsyncMap<K, V> {
 
   @Override
   public void get(K k, Handler<AsyncResult<V>> asyncResultHandler) {
-    ICompletableFuture<V> future = (ICompletableFuture<V>) map.getAsync(convertParam(k));
-    future.andThen(
-            new HandlerCallBackAdapter<>(asyncResultHandler),
-            new VertxExecutorAdapter(vertx.getOrCreateContext())
+    executeAsync(
+            () -> (ICompletableFuture<V>)map.getAsync(convertParam(k)),
+            asyncResultHandler
     );
   }
 
@@ -57,10 +57,9 @@ public class HazelcastAsyncMap<K, V> implements AsyncMap<K, V> {
   public void put(K k, V v, Handler<AsyncResult<Void>> completionHandler) {
     K kk = convertParam(k);
     V vv = convertParam(v);
-    ICompletableFuture<Void> future = (ICompletableFuture<Void>) map.putAsync(kk, vv);
-    future.andThen(
-            new VoidHandlerCallBackAdapter(completionHandler),
-            new VertxExecutorAdapter(vertx.getOrCreateContext())
+    executeAsyncVoid(
+            () -> (ICompletableFuture<Void>)map.putAsync(kk, vv),
+            completionHandler
     );
   }
 
@@ -76,10 +75,10 @@ public class HazelcastAsyncMap<K, V> implements AsyncMap<K, V> {
   public void put(K k, V v, long ttl, Handler<AsyncResult<Void>> completionHandler) {
     K kk = convertParam(k);
     V vv = convertParam(v);
-    vertx.executeBlocking(fut -> {
-      map.set(kk, HazelcastServerID.convertServerID(vv), ttl, TimeUnit.MILLISECONDS);
-      fut.complete();
-    }, completionHandler);
+    executeAsyncVoid(
+            () -> (ICompletableFuture<Void>) map.putAsync(kk, vv, ttl, TimeUnit.MILLISECONDS),
+            completionHandler
+    );
   }
 
   @Override
@@ -93,7 +92,10 @@ public class HazelcastAsyncMap<K, V> implements AsyncMap<K, V> {
   @Override
   public void remove(K k, Handler<AsyncResult<V>> resultHandler) {
     K kk = convertParam(k);
-    vertx.executeBlocking(fut -> fut.complete(convertReturn(map.remove(kk))), resultHandler);
+    executeAsync(
+            () -> (ICompletableFuture<V>)map.removeAsync(kk),
+            resultHandler
+    );
   }
 
   @Override
@@ -131,5 +133,32 @@ public class HazelcastAsyncMap<K, V> implements AsyncMap<K, V> {
     vertx.executeBlocking(fut -> fut.complete(map.size()), resultHandler);
   }
 
+  private <T> void executeAsync(Callable<ICompletableFuture<T>> callable,
+                              Handler<AsyncResult<T>> resultHandler) {
+    try {
+      ICompletableFuture<T> future = callable.call();
+      future.andThen(
+              new HandlerCallBackAdapter(resultHandler),
+              new VertxExecutorAdapter(vertx.getOrCreateContext())
+      );
+    }
+    catch (Exception e) {
+
+    }
+  }
+
+  private void executeAsyncVoid(Callable<ICompletableFuture<Void>> callable,
+                              Handler<AsyncResult<Void>> resultHandler) {
+    try {
+      ICompletableFuture<Void> future = callable.call();
+      future.andThen(
+              new VoidHandlerCallBackAdapter(resultHandler),
+              new VertxExecutorAdapter(vertx.getOrCreateContext())
+      );
+    }
+    catch (Exception e) {
+
+    }
+  }
 
 }
